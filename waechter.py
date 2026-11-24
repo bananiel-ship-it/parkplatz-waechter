@@ -425,7 +425,8 @@ def mail_geocode(items):
 
 
 def source_mail(cfg, state):
-    user, pw = os.environ.get("MAIL_USER"), os.environ.get("MAIL_APP_PASSWORD")
+    user = (os.environ.get("MAIL_USER") or "").strip()
+    pw = re.sub(r"\s", "", os.environ.get("MAIL_APP_PASSWORD") or "")  # Gmail zeigt es in 4er-Gruppen an
     if not user or not pw:
         return []  # Mail-Brücke nicht eingerichtet
     import imaplib
