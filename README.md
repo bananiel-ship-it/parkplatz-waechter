@@ -5,6 +5,7 @@ Sucht alle 10 Minuten neue Mietparkplätze in Gehdistanz und schickt einen Push 
 - **Quellen:** Flatfox (Schnittstelle mit genauem Standort), tutti.ch. Homegate, ImmoScout24, Newhome und Comparis sperren automatische Abfragen. Für diese Portale ein Suchabo einrichten.
 - **Filter** (`config.json`): Wunsch 7 Min., Maximum 10 Min. zu Fuss (echte Fusswege über OpenStreetMap), bis CHF 250/Mt., nur Miete, keine Velo- und Motorradplätze.
 - **Push:** Tiefgarage, Einzelgarage und Carport sofort und mit hoher Priorität, auch nachts. Aussenplätze kommen nachts (22–7 Uhr) gesammelt um 7 Uhr. Plätze mit 8–10 Min. Gehzeit sind als „etwas weiter“ markiert.
+- **Sammel-Meldungen** (erster Lauf, mehr als 8 neue Plätze, Aussenplätze aus der Nacht) öffnen `docs/liste.html`. Dort ist jedes Inserat einzeln antippbar.
 - **Antippen** öffnet das Inserat. Der Knopf „Anfragetext“ öffnet `docs/anfrage.html` mit einem fertigen Text in der Sie-Form.
 
 ## Einrichten
@@ -23,6 +24,7 @@ Sucht alle 10 Minuten neue Mietparkplätze in Gehdistanz und schickt einen Push 
 set -a; source .env.local; set +a
 python3 waechter.py --dry-run     # zeigt die Treffer, sendet nichts
 python3 waechter.py --test-push   # schickt einen Beispiel-Push
+python3 waechter.py --alle        # schickt alle aktuell passenden Plätze als Liste
 ```
 
 Hinweis: GitHub startet geplante Läufe manchmal mit einigen Minuten Verspätung.
