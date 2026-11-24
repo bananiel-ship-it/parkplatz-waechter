@@ -1,0 +1,12 @@
+{
+  "wunsch_gehzeit_min": 7,
+  "max_gehzeit_min": 10,
+  "max_miete_chf": 250,
+  "platzarten": { "tg": true, "box": true, "cp": true, "out": true },
+  "nachtruhe": { "von_uhr": 22, "bis_uhr": 7, "nachts_nur_ueberdacht": true },
+  "max_einzel_pushes_pro_lauf": 8,
+  "tutti": {
+    "suchbegriffe": ["parkplatz", "tiefgaragenplatz", "einstellplatz", "garage"],
+    "plz": [8003, 8004, 8005, 8045, 8047, 8048, 8055]
+  }
+}

@@ -1,0 +1,56 @@
+name: Parkplatz-Wächter
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # alle 10 Minuten
+    - cron: "17 4 1 * *"     # einmal im Monat: Lebenszeichen, damit GitHub den Zeitplan nicht pausiert
+  workflow_dispatch:
+
+concurrency:
+  group: waechter
+  cancel-in-progress: false
+
+jobs:
+  suchen:
+    if: github.event.schedule != '17 4 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Zustand laden
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+      - name: Wächter ausführen
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HOME_LAT: ${{ secrets.HOME_LAT }}
+          HOME_LON: ${{ secrets.HOME_LON }}
+          ANFRAGE_SEITE: ${{ vars.ANFRAGE_SEITE }}
+        run: python waechter.py
+      - name: Zustand speichern
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: state-${{ github.run_id }}
+
+  lebenszeichen:
+    if: github.event.schedule == '17 4 1 * *'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git config user.name "parkplatz-waechter"
+          git config user.email "actions@users.noreply.github.com"
+          date -u +%Y-%m-%d > .lebenszeichen
+          git add .lebenszeichen
+          git commit -m "Monatliches Lebenszeichen"
+          git push
