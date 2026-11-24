@@ -18,6 +18,17 @@ Sucht alle 10 Minuten neue Mietparkplätze in Gehdistanz und schickt einen Push 
 4. **Settings → Pages:** Branch `main`, Ordner `/docs`, damit die Anfragetext-Seite erreichbar ist.
 5. Unter **Actions → Parkplatz-Wächter → Run workflow** einmal von Hand starten. Der erste Lauf schickt eine Übersicht aller Plätze, die schon jetzt passen. Danach kommt nur noch ein Push, wenn ein neues Inserat erscheint.
 
+## Mail-Brücke (Homegate, ImmoScout24, Newhome, Comparis, tutti)
+
+Diese Portale lassen sich nicht direkt abfragen. Der Wächter liest stattdessen ihre Suchabo-Mails aus einem eigenen Postfach-Ordner. Er liest nur und verändert keine Mails.
+
+1. Auf jedem Portal ein Suchabo mit E-Mail anlegen: Parkplatz/Garage mieten, PLZ 8003, 8004 und 8005 (oder Umkreis), bis CHF 250, Benachrichtigung „sofort“ bzw. „täglich“, wenn es nichts anderes gibt.
+2. Im Postfach einen Filter anlegen, der Mails dieser Absender in den Ordner bzw. das Label `Parkplatz-Alarm` legt.
+3. Für das Postfach ein App-Passwort erstellen (Gmail: Bestätigung in zwei Schritten einschalten, dann myaccount.google.com/apppasswords).
+4. Auf GitHub unter **Settings → Secrets and variables → Actions** die Secrets `MAIL_USER` (Mail-Adresse) und `MAIL_APP_PASSWORD` (App-Passwort) anlegen. Bei einem anderen Anbieter als Gmail zusätzlich die Variable `MAIL_IMAP_HOST` setzen, bei einem anderen Ordnernamen `MAIL_ORDNER`.
+
+Eine gespeicherte Suchabo-Mail (.eml) lässt sich lokal prüfen: `python3 waechter.py --mail-datei mail.eml`.
+
 ## Lokal testen
 
 ```bash

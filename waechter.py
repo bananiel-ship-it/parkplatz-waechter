@@ -9,11 +9,16 @@ Umgebungsvariablen:
   NTFY_SERVER         Standard: https://ntfy.sh
   ANFRAGE_SEITE       URL der Anfragetext-Seite (optional, z. B. GitHub Pages)
   STATE_PATH          Standard: state/state.json
+  MAIL_USER, MAIL_APP_PASSWORD  Postfach mit Suchabo-Mails (optional, Mail-Brücke)
+  MAIL_IMAP_HOST      Standard: imap.gmail.com
+  MAIL_ORDNER         Standard: Parkplatz-Alarm
 
 Aufruf:
   python3 waechter.py             normaler Lauf
   python3 waechter.py --dry-run   nichts senden, nichts speichern, Treffer anzeigen
   python3 waechter.py --test-push Beispiel-Push senden
+  python3 waechter.py --alle      alle aktuell passenden Plätze als Liste senden
+  python3 waechter.py --mail-datei a.eml b.eml   Suchabo-Mails testweise auswerten (lokal)
 """
 import base64
 import json
@@ -140,6 +145,7 @@ def save_state(s):
     cutoff = time.time() - 120 * 86400
     s["seen"] = {k: v for k, v in s["seen"].items() if v > cutoff}
     s["sigs"] = {k: v for k, v in s["sigs"].items() if v > cutoff}
+    s["mails"] = {k: v for k, v in s.get("mails", {}).items() if v > time.time() - 10 * 86400}
     p = state_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".tmp"
@@ -282,7 +288,182 @@ def source_tutti(cfg, state):
     return out
 
 
-SOURCES = [("Flatfox", source_flatfox), ("tutti.ch", source_tutti)]
+# ---------------------------------------------------------------- Mail-Brücke
+# Liest Suchabo-Mails (Homegate, ImmoScout24, Newhome, Comparis, tutti …) aus einem
+# eigenen Postfach-Ordner. Nur lesend (readonly), Mails bleiben unverändert.
+
+PORTALE = {"homegate": "Homegate", "immoscout24": "ImmoScout24", "newhome": "Newhome",
+           "comparis": "Comparis", "tutti": "tutti.ch", "flatfox": "Flatfox", "anibis": "anibis"}
+LINK_SKIP_RE = re.compile(
+    r"unsubscribe|abmeld|abbestell|austragen|einstellung|settings|preferences|profil|impressum|datenschutz|privacy"
+    r"|apps\.apple|play\.google|facebook|instagram|linkedin|twitter|tiktok|youtube|mailto:|/hilfe|/help|kontakt"
+    r"|suchabo|search-?alert|alert|login|anmelden|\.(?:png|jpe?g|gif)(?:\?|$)", re.I)
+SALE_RE = re.compile(r"\bkaufen\b|/kaufen/|/buy/|kaufpreis|zu verkaufen|verkaufspreis", re.I)
+ADDR_RE = re.compile(
+    r"([A-ZÄÖÜ][A-Za-zÄÖÜäöüéèàâç'.\- ]{2,40}?\s\d{1,4}\s?[a-zA-Z]?)\s*(?:,|\n)\s*(\d{4})\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöüéè.\- ]{1,30})")
+PRICE_RE = re.compile(r"(?:CHF|Fr\.)\s*([\d'’]{2,6})(?:\.[\-–—]|\.00)?|([\d'’]{2,6})(?:\.[\-–—])?\s*CHF", re.I)
+MONATE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def html_text_links(h):
+    """HTML in Text umwandeln; Links mit ihrer Position im Text merken."""
+    import html as htmlmod
+    h = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", " ", h)
+    parts, links, pos = [], [], 0
+    for m in re.finditer(r"(?is)<a\b[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>|<br\s*/?>|</(?:p|div|td|tr|li|h\d|table)\s*>|<[^>]+>", h):
+        t = htmlmod.unescape(h[pos:m.start()])
+        t = re.sub(r"[ \t\r\f\v ]+", " ", t)
+        if t.strip():
+            parts.append(t)
+        n = sum(len(p) for p in parts)
+        if m.group(1):
+            links.append((n, htmlmod.unescape(m.group(1)).strip()))
+        elif m.group(0)[:2].lower() in ("<b", "</"):
+            parts.append("\n")
+        pos = m.end()
+    parts.append(htmlmod.unescape(h[pos:]))
+    return "".join(parts), links
+
+
+def plain_text_links(t):
+    links = [(m.start(), m.group(0)) for m in re.finditer(r"https?://[^\s<>\"']+", t)]
+    return t, links
+
+
+def parse_alert(html_or_text, portal, is_html=True):
+    """Inserate (Adresse, Preis, Link) aus einer Suchabo-Mail holen."""
+    text, links = html_text_links(html_or_text) if is_html else plain_text_links(html_or_text)
+    links = [(p, u) for p, u in links if u.startswith("http") and not LINK_SKIP_RE.search(u)]
+    addrs = list(ADDR_RE.finditer(text))
+    if not addrs:
+        return []
+    # Steht der Link vor der Adresse (HTML-Karten: Titel-Link, dann Adresse)
+    # oder danach (Text-Mails: Adresse, dann URL)? An der ersten Adresse entscheiden.
+    first = addrs[0]
+    link_before = any(first.start() - 700 <= p <= first.start() for p, _ in links)
+    picks = []
+    for i, m in enumerate(addrs):
+        prev_end = addrs[i - 1].end() if i else max(0, m.start() - 700)
+        next_start = addrs[i + 1].start() if i + 1 < len(addrs) else len(text)
+        if link_before:
+            c = [(p, u) for p, u in links if prev_end <= p <= m.start()]
+            picks.append(c[-1] if c else None)
+        else:
+            c = [(p, u) for p, u in links if m.end() <= p <= next_start]
+            picks.append(c[0] if c else None)
+    out = []
+    for i, m in enumerate(addrs):
+        if not picks[i]:
+            continue
+        pos, url = picks[i]
+        # Block eines Inserats: von seinem Link bis zum Link des nächsten (bzw. umgekehrt)
+        if link_before:
+            lo = pos
+            nxt = next((picks[j][0] for j in range(i + 1, len(addrs)) if picks[j]), None)
+            hi = nxt if nxt is not None else min(len(text), m.end() + 300)
+        else:
+            prv = next((picks[j][0] + len(picks[j][1]) for j in range(i - 1, -1, -1) if picks[j]), None)
+            lo = prv if prv is not None else max(0, m.start() - 300)
+            hi = pos + len(url)
+        seg = text[lo:hi]
+        if SALE_RE.search(seg) or SALE_RE.search(url):
+            continue
+        price, best = None, None
+        for pm in PRICE_RE.finditer(seg):
+            v = int(re.sub(r"\D", "", pm.group(1) or pm.group(2)))
+            dist = abs((lo + pm.start()) - m.start())
+            if 20 <= v <= 2000 and (best is None or dist < best):
+                price, best = v, dist
+        street = re.sub(r"\s+", " ", m.group(1)).strip()
+        out.append({"street": street, "zip": m.group(2), "city": m.group(3).strip(),
+                    "price": price, "seg": seg, "url": url, "source": portal})
+    return out
+
+
+def geocode(street, plz, city):
+    q = urllib.parse.urlencode({"type": "locations", "origins": "address", "limit": 1, "sr": 4326,
+                                "searchText": "%s %s %s" % (street, plz, city)})
+    r = get_json("https://api3.geo.admin.ch/rest/services/api/SearchServer?" + q).get("results") or []
+    if not r:
+        return None, None
+    a = r[0]["attrs"]
+    if str(plz) not in re.sub(r"<[^>]+>", "", a.get("label", "")):
+        return None, None
+    return a.get("lat"), a.get("lon")
+
+
+def mail_listings(raw):
+    """Eine Mail (Bytes) → Liste von Inseraten im Wächter-Format (ohne Koordinaten)."""
+    import email
+    import email.policy
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    sender = str(msg.get("From", "")).lower()
+    portal = next((name for dom, name in PORTALE.items() if dom in sender), "E-Mail")
+    part = msg.get_body(preferencelist=("html", "plain"))
+    if part is None:
+        return []
+    body = part.get_content()
+    found = parse_alert(body, portal, part.get_content_type() == "text/html")
+    out = []
+    for f in found:
+        typ = classify(f["seg"], "")  # Suchabo ist auf Parkplätze eingestellt: ohne Stichwort = Aussenplatz
+        out.append({
+            "key": "mail:%s|%s" % (portal, signature(f)), "source": portal + " (Suchabo)", "type": typ,
+            "title": f["seg"][:120], "street": f["street"], "zip": f["zip"], "city": f["city"],
+            "lat": None, "lon": None, "price": f["price"], "from": tutti_from(f["seg"]), "url": f["url"],
+        })
+    return out
+
+
+def mail_geocode(items):
+    for l in items:
+        try:
+            l["lat"], l["lon"] = geocode(l["street"], l["zip"], l.get("city") or "")
+        except Exception:
+            l["lat"] = l["lon"] = None
+        time.sleep(0.2)
+
+
+def source_mail(cfg, state):
+    user, pw = os.environ.get("MAIL_USER"), os.environ.get("MAIL_APP_PASSWORD")
+    if not user or not pw:
+        return []  # Mail-Brücke nicht eingerichtet
+    import imaplib
+    host = os.environ.get("MAIL_IMAP_HOST") or "imap.gmail.com"
+    folder = os.environ.get("MAIL_ORDNER") or "Parkplatz-Alarm"
+    done = state.setdefault("mails", {})
+    M = imaplib.IMAP4_SSL(host, timeout=30)
+    out = []
+    try:
+        M.login(user, pw)
+        typ, _ = M.select('"%s"' % folder, readonly=True)
+        if typ != "OK":
+            raise RuntimeError("Mail-Ordner \"%s\" nicht gefunden" % folder)
+        d = datetime.now(timezone.utc).timestamp() - 3 * 86400
+        d = datetime.fromtimestamp(d, timezone.utc)
+        since = "%02d-%s-%d" % (d.day, MONATE[d.month - 1], d.year)
+        typ, data = M.uid("search", None, "SINCE", since)
+        for uid in (data[0].split() if data and data[0] else [])[-60:]:
+            k = "%s:%s" % (folder, uid.decode())
+            if k in done:
+                continue
+            typ, msg = M.uid("fetch", uid, "(BODY.PEEK[])")
+            raw = next((x[1] for x in msg if isinstance(x, tuple)), None)
+            if raw:
+                for l in mail_listings(raw):
+                    if l["key"] not in state["seen"]:
+                        out.append(l)
+            done[k] = time.time()
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+    mail_geocode(out)
+    return out
+
+
+SOURCES = [("Flatfox", source_flatfox), ("tutti.ch", source_tutti), ("E-Mail", source_mail)]
 
 
 # ---------------------------------------------------------------- Gehzeit
@@ -422,6 +603,21 @@ def main():
         log("Test-Push gesendet.")
         return
     cfg = load_config()
+    if "--mail-datei" in args:
+        items = []
+        for p in args[args.index("--mail-datei") + 1:]:
+            with open(p, "rb") as f:
+                got = mail_listings(f.read())
+            log("%s: %d Inserate erkannt" % (os.path.basename(p), len(got)))
+            items += got
+        mail_geocode(items)
+        add_walk(cfg, items)
+        for l in items:
+            ok = "PASST " if passes(cfg, l) else "nein  "
+            log(ok, l["source"], TYPES[l["type"]]["label"] if l["type"] else "-",
+                "%s Min." % l["walk"] if l["walk"] is not None else "Lage ?", price_text(l),
+                "%s, %s" % (l["street"], l["zip"]), l["url"][:90])
+        return
     state = load_state()
     first = not state.get("initialized")
     now = datetime.now(TZ)

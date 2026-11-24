@@ -32,6 +32,10 @@ jobs:
           HOME_LAT: ${{ secrets.HOME_LAT }}
           HOME_LON: ${{ secrets.HOME_LON }}
           ANFRAGE_SEITE: ${{ vars.ANFRAGE_SEITE }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_APP_PASSWORD: ${{ secrets.MAIL_APP_PASSWORD }}
+          MAIL_IMAP_HOST: ${{ vars.MAIL_IMAP_HOST }}
+          MAIL_ORDNER: ${{ vars.MAIL_ORDNER }}
         run: python waechter.py
       - name: Zustand speichern
         if: always()
