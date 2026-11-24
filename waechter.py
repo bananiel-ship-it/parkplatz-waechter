@@ -49,6 +49,11 @@ PARK_RE = re.compile(r"parkplatz|parkplätze|abstellplatz|stellplatz|einstellpla
 
 # ---------------------------------------------------------------- Hilfen
 
+# Auf GitHub sind die Logs öffentlich: dort keine Treffer mit Gehzeiten ausgeben,
+# sonst liesse sich der Wohnort daraus ableiten.
+PUBLIC_LOG = os.environ.get("GITHUB_ACTIONS") == "true"
+
+
 def log(*a):
     print(datetime.now(TZ).strftime("%H:%M:%S"), *a, flush=True)
 
@@ -412,6 +417,10 @@ def main():
             found += items
             state["fails"][name] = 0
         except Exception as e:
+            if getattr(e, "code", None) == 403:
+                # Portal sperrt diese Server (z. B. GitHub). Nicht umgehen, nicht warnen.
+                log("%s: gesperrt (403), übersprungen" % name)
+                continue
             c = state["fails"].get(name, 0) + 1
             state["fails"][name] = c
             log("%s: Fehler (%dx hintereinander): %s" % (name, c, e))
@@ -426,13 +435,14 @@ def main():
     for l in matches:
         sig = signature(l)
         if sig in state["sigs"]:
-            log("Doppelt, kein Push:", l["key"], l["street"])
+            if not PUBLIC_LOG:
+                log("Doppelt, kein Push:", l["key"], l["street"])
             continue
         state["sigs"][sig] = time.time()
         fresh.append(l)
     for l in found:
         state["seen"][l["key"]] = time.time()
-        if l in matches:
+        if l in matches and not PUBLIC_LOG:
             log("TREFFER %-12s %2d Min.  %-18s %-40s %s" % (TYPES[l["type"]]["label"], l["walk"], price_text(l), l["street"][:40], l["url"]))
 
     if first:
