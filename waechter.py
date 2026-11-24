@@ -376,14 +376,33 @@ def push_listing(cfg, l, dry):
     }, dry)
 
 
+def liste_url(cfg, title, items):
+    """Link auf docs/liste.html: jedes Inserat einzeln antippbar."""
+    page = os.environ.get("ANFRAGE_SEITE")
+    if not page or not items:
+        return None
+    data = {"t": title, "x": cfg["wunsch_gehzeit_min"], "i": [{
+        "k": TYPES[l["type"]]["label"], "a": TYPES[l["type"]]["akk"], "c": TYPES[l["type"]]["covered"],
+        "w": l["walk"], "p": price_text(l), "s": l["street"], "f": l["from"], "q": l["source"], "u": l["url"],
+    } for l in items[:30]]}
+    tok = base64.urlsafe_b64encode(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).decode().rstrip("=")
+    return urllib.parse.urljoin(page, "liste.html") + "#" + tok
+
+
 def push_summary(cfg, title, items, dry, prio=3):
+    if not items:
+        return
     lines = ["%s, %d Min., %s, %s" % (TYPES[l["type"]]["label"], l["walk"], price_text(l), l["street"]) for l in items[:10]]
     if len(items) > 10:
         lines.append("… und %d weitere" % (len(items) - 10))
+    lu = liste_url(cfg, title, items)
+    if lu:
+        lines.append("Antippen zeigt alle Inserate einzeln.")
+    actions = [{"action": "view", "label": "Alle ansehen", "url": lu}] if lu else []
+    actions.append({"action": "view", "label": "Bester Treffer", "url": items[0]["url"]})
     ntfy({
         "title": title, "message": "\n".join(lines), "priority": prio, "tags": ["parking"],
-        "click": items[0]["url"] if items else None,
-        "actions": [{"action": "view", "label": "Bester Treffer", "url": items[0]["url"]}] if items else [],
+        "click": lu or items[0]["url"], "actions": actions,
     }, dry)
 
 
@@ -440,6 +459,11 @@ def main():
             continue
         state["sigs"][sig] = time.time()
         fresh.append(l)
+    if "--alle" in args:
+        # Einmalig alle aktuell passenden Plätze als Liste schicken, Zustand bleibt unverändert.
+        push_summary(cfg, "Aktuell %d passende Parkplätze" % len(matches), matches, dry)
+        log("Liste mit %d Plätzen gesendet." % len(matches))
+        return
     for l in found:
         state["seen"][l["key"]] = time.time()
         if l in matches and not PUBLIC_LOG:
